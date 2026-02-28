@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Tilt Charades</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+    <div id="app">
+
+        <!-- CATEGORY SCREEN -->
+        <section id="screen-categories" class="screen active">
+            <header class="topbar">
+                <h1 class="title">Tilt Charades</h1>
+            </header>
+
+            <div class="panel">
+                <p class="hint">
+                    Hold the phone to your forehead (like theme-park heads-up).
+                    <br />Tilt <b>up</b> for <b>Correct</b>, tilt <b>down</b> to <b>Pass</b>.
+                </p>
+
+                <button id="btn-enable-motion" class="btn btn-primary">
+                    Enable Motion (required on iPhone/iPad)
+                </button>
+
+                <div class="divider"></div>
+
+                <h2 class="subtitle">Pick a category</h2>
+                <div id="category-list" class="category-list" aria-live="polite"></div>
+
+                <p class="footnote">
+                    Tip: For best results, serve over HTTPS (or localhost) so motion sensors work.
+                </p>
+            </div>
+        </section>
+
+        <!-- COUNTDOWN SCREEN -->
+        <section id="screen-countdown" class="screen">
+            <div class="center">
+                <div class="big-label">Get Ready</div>
+                <div id="countdown-number" class="countdown-number">5</div>
+                <div class="small-label">Round starts soon…</div>
+            </div>
+        </section>
+
+        <!-- GAMEPLAY SCREEN -->
+        <section id="screen-game" class="screen">
+            <header class="topbar">
+                <div id="timer" class="timer">60</div>
+                <div id="category-name" class="category-pill">Category</div>
+                <div class="spacer"></div>
+            </header>
+
+            <div class="word-area">
+                <div id="word" class="word">WORD</div>
+            </div>
+
+            <div id="status-overlay" class="status-overlay" aria-hidden="true">
+                <div id="status-text" class="status-text">Correct!</div>
+            </div>
+
+            <footer class="bottombar">
+                <div class="tilt-help">
+                    <span>⬆️ Correct</span>
+                    <span>⬇️ Pass</span>
+                </div>
+            </footer>
+        </section>
+
+        <!-- RESULTS SCREEN -->
+        <section id="screen-results" class="screen">
+            <header class="topbar">
+                <h2 class="title">Round Results</h2>
+            </header>
+
+            <div class="panel">
+                <div class="scoreline">
+                    Score: <span id="score" class="score">0</span>
+                </div>
+
+                <div class="results-list-wrap">
+                    <ul id="results-list" class="results-list"></ul>
+                </div>
+
+                <button id="btn-back" class="btn btn-primary">Pick New Category</button>
+            </div>
+        </section>
+
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

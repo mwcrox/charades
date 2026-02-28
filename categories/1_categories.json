@@ -1,0 +1,12 @@
+{
+    "categories": [
+        {
+            "name": "Disney",
+            "file": "disney.json"
+        },
+        {
+            "name": "Animals",
+            "file": "animals.json"
+        }
+    ]
+}
