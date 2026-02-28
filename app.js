@@ -1,3 +1,7 @@
+/* ================================
+   Tilt Charades - Final Version
+   ================================ */
+
 const SCREENS = {
     categories: document.getElementById("screen-categories"),
     countdown: document.getElementById("screen-countdown"),
@@ -6,51 +10,57 @@ const SCREENS = {
 };
 
 const ui = {
-    // modal / overlays
     motionModal: document.getElementById("motion-modal"),
     modalEnable: document.getElementById("modal-enable"),
     rotateOverlay: document.getElementById("rotate-overlay"),
 
-    // category screen
     categoryList: document.getElementById("category-list"),
-
-    // countdown
     countdownNumber: document.getElementById("countdown-number"),
 
-    // gameplay
     timer: document.getElementById("timer"),
     categoryName: document.getElementById("category-name"),
     word: document.getElementById("word"),
+
     overlay: document.getElementById("status-overlay"),
     overlayText: document.getElementById("status-text"),
 
-    // results
     score: document.getElementById("score"),
     resultsList: document.getElementById("results-list"),
     backBtn: document.getElementById("btn-back"),
 };
 
+/* ================================
+   CONFIGURATION
+   ================================ */
+
 const CONFIG = {
-    indexFile: "categories/1_categories.json", // <-- your renamed index file
+    indexFile: "categories/1_categories.json",
 
     countdownSeconds: 5,
     roundSeconds: 60,
 
-    // STRONG thresholds (relative to neutral)
-    // We calibrate neutral when round starts and also after each word.
-    // Then we require returning to neutral before next word appears.
-    neutralToleranceDeg: 8,     // must be within this to be "neutral"
-    correctThresholdDeg: 35,    // tilt toward sky
-    passThresholdDeg: -35,      // tilt toward floor
+    overlayMs: 1000,
 
-    overlayMs: 420,
+    neutralToleranceDeg: 6,
+    correctThresholdDeg: 45,
+    passThresholdDeg: -45,
+
+    holdToTriggerMs: 220,
+    minPostActionHoldMs: 900,
 };
 
+/* ================================
+   AUDIO
+   ================================ */
+
 let audioCtx = null;
+
 function ensureAudio() {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (!audioCtx)
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 }
-function beep({ freq = 440, duration = 0.12, type = "sine", gain = 0.06 } = {}) {
+
+function beep({ freq = 440, duration = 0.12, type = "sine", gain = 0.07 } = {}) {
     ensureAudio();
     const t0 = audioCtx.currentTime;
     const osc = audioCtx.createOscillator();
@@ -64,15 +74,25 @@ function beep({ freq = 440, duration = 0.12, type = "sine", gain = 0.06 } = {}) 
     osc.start(t0);
     osc.stop(t0 + duration + 0.02);
 }
+
 const sounds = {
-    countdownTick() { beep({ freq: 660, duration: 0.08, gain: 0.07 }); },
-    roundStart() { beep({ freq: 880, duration: 0.18, gain: 0.08 }); },
-    correct() { beep({ freq: 1040, duration: 0.12, gain: 0.08 }); setTimeout(() => beep({ freq: 1320, duration: 0.10, gain: 0.07 }), 70); },
-    pass() { beep({ freq: 240, duration: 0.16, type: "square", gain: 0.06 }); },
-    roundEnd() { beep({ freq: 330, duration: 0.20, gain: 0.08 }); setTimeout(() => beep({ freq: 220, duration: 0.25, gain: 0.08 }), 160); },
+    countdownTick() { beep({ freq: 660, duration: 0.08 }); },
+    roundStart() { beep({ freq: 880, duration: 0.18 }); },
+    correct() {
+        beep({ freq: 1040, duration: 0.12 });
+        setTimeout(() => beep({ freq: 1320, duration: 0.1 }), 80);
+    },
+    pass() { beep({ freq: 240, duration: 0.16, type: "square" }); },
+    roundEnd() {
+        beep({ freq: 330, duration: 0.2 });
+        setTimeout(() => beep({ freq: 220, duration: 0.25 }), 160);
+    },
 };
 
-// ---------- state ----------
+/* ================================
+   STATE
+   ================================ */
+
 let categoriesIndex = [];
 let currentCategory = null;
 
@@ -85,15 +105,21 @@ let roundTimer = null;
 let roundEndsAt = 0;
 
 let gameActive = false;
-let used = []; // { word, result: "correct"|"bad" }
+let used = [];
 let score = 0;
 
-// Motion / tilt gating
-let neutralRef = null;        // { beta, gamma } baseline "forehead neutral"
-let tiltState = "NEED_NEUTRAL"; // NEED_NEUTRAL -> ARMED -> (ACTION) -> NEED_NEUTRAL
-let pendingAdvance = false;   // after action, wait for neutral before next word
+let neutralRef = null;
+let tiltState = "NEED_NEUTRAL";
+let pendingAdvance = false;
 
-// ---------- helpers ----------
+let postActionUnlockAt = 0;
+let holdStartCorrect = null;
+let holdStartPass = null;
+
+/* ================================
+   HELPERS
+   ================================ */
+
 function showScreen(name) {
     Object.values(SCREENS).forEach(s => s.classList.remove("active"));
     SCREENS[name].classList.add("active");
@@ -104,16 +130,13 @@ function isLandscape() {
 }
 
 function updateRotateOverlay() {
-    const mustShow = !isLandscape();
-    ui.rotateOverlay.classList.toggle("active", mustShow);
-    ui.rotateOverlay.setAttribute("aria-hidden", mustShow ? "false" : "true");
+    const show = !isLandscape();
+    ui.rotateOverlay.classList.toggle("active", show);
 }
 
 function clearTimers() {
     if (countdownTimer) clearInterval(countdownTimer);
     if (roundTimer) clearInterval(roundTimer);
-    countdownTimer = null;
-    roundTimer = null;
 }
 
 function shuffle(arr) {
@@ -124,31 +147,14 @@ function shuffle(arr) {
     return arr;
 }
 
-function setOverlay(text, kind) {
-    ui.overlayText.textContent = text;
-    ui.overlayText.style.borderColor = kind === "correct" ? "rgba(46,204,113,0.6)" : "rgba(255,59,59,0.6)";
-    ui.overlayText.style.background = kind === "correct" ? "rgba(46,204,113,0.22)" : "rgba(255,59,59,0.22)";
-    ui.overlay.classList.add("show");
-    ui.overlay.setAttribute("aria-hidden", "false");
-    setTimeout(() => {
-        ui.overlay.classList.remove("show");
-        ui.overlay.setAttribute("aria-hidden", "true");
-    }, CONFIG.overlayMs);
-}
+/* ================================
+   CATEGORY LOADING
+   ================================ */
 
-function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, c => ({
-        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
-    }[c]));
-}
-
-// ---------- loading categories ----------
 async function loadCategoriesIndex() {
     const res = await fetch(CONFIG.indexFile, { cache: "no-store" });
-    if (!res.ok) throw new Error("Failed to load category index");
     const data = await res.json();
-    if (!Array.isArray(data.categories)) throw new Error("Invalid index format");
-    categoriesIndex = data.categories;
+    categoriesIndex = data.categories || [];
 }
 
 function renderCategories() {
@@ -156,55 +162,29 @@ function renderCategories() {
     categoriesIndex.forEach(cat => {
         const btn = document.createElement("button");
         btn.className = "category-btn";
-        btn.type = "button";
-        btn.innerHTML = escapeHtml(cat.name);
-        btn.addEventListener("click", () => startCategory(cat));
+        btn.textContent = cat.name;
+        btn.onclick = () => startCategory(cat);
         ui.categoryList.appendChild(btn);
     });
 }
 
 async function loadCategoryWords(file) {
     const res = await fetch(`categories/${file}`, { cache: "no-store" });
-    if (!res.ok) throw new Error(`Failed to load category file: ${file}`);
     const data = await res.json();
-    if (!Array.isArray(data.words)) throw new Error("Invalid category format");
-    return data.words.map(w => (typeof w === "string" ? w.trim() : "")).filter(Boolean);
+    return (data.words || []).filter(Boolean);
 }
 
-// ---------- permission / start ----------
-async function requestMotionPermission() {
-    // iOS requires this from a user gesture
-    if (typeof DeviceOrientationEvent !== "undefined" &&
-        typeof DeviceOrientationEvent.requestPermission === "function") {
-        const resp = await DeviceOrientationEvent.requestPermission();
-        if (resp !== "granted") throw new Error("Motion permission not granted");
-    }
-}
+/* ================================
+   GAME FLOW
+   ================================ */
 
-async function tryLockLandscape() {
-    try {
-        if (screen.orientation && screen.orientation.lock) {
-            await screen.orientation.lock("landscape");
-        }
-    } catch (_) { }
-}
-
-// ---------- game flow ----------
 async function startCategory(cat) {
-    if (!isLandscape()) {
-        updateRotateOverlay();
-        return;
-    }
+    if (!isLandscape()) return updateRotateOverlay();
 
     currentCategory = cat;
     ui.categoryName.textContent = cat.name;
 
     words = await loadCategoryWords(cat.file);
-    if (!words.length) {
-        alert("That category has no words.");
-        return;
-    }
-
     deck = shuffle([...words]);
     deckIndex = 0;
 
@@ -212,26 +192,21 @@ async function startCategory(cat) {
     score = 0;
 
     showScreen("countdown");
-    runCountdownAndStart();
+    runCountdown();
 }
 
-function runCountdownAndStart() {
-    clearTimers();
-
+function runCountdown() {
     let remaining = CONFIG.countdownSeconds;
-    ui.countdownNumber.textContent = String(remaining);
+    ui.countdownNumber.textContent = remaining;
     sounds.countdownTick();
 
     countdownTimer = setInterval(() => {
-        if (!isLandscape()) { updateRotateOverlay(); return; }
-
-        remaining -= 1;
+        remaining--;
         if (remaining > 0) {
-            ui.countdownNumber.textContent = String(remaining);
+            ui.countdownNumber.textContent = remaining;
             sounds.countdownTick();
         } else {
             clearInterval(countdownTimer);
-            countdownTimer = null;
             sounds.roundStart();
             beginRound();
         }
@@ -242,25 +217,19 @@ function beginRound() {
     showScreen("game");
 
     gameActive = true;
-    roundEndsAt = Date.now() + CONFIG.roundSeconds * 1000;
-    ui.timer.textContent = String(CONFIG.roundSeconds);
-
-    // reset tilt state
     neutralRef = null;
     tiltState = "NEED_NEUTRAL";
     pendingAdvance = false;
 
-    // first word
     showCurrentWord();
 
-    roundTimer = setInterval(() => {
-        if (!gameActive) return;
-        if (!isLandscape()) { updateRotateOverlay(); return; }
+    roundEndsAt = Date.now() + CONFIG.roundSeconds * 1000;
+    ui.timer.textContent = CONFIG.roundSeconds;
 
+    roundTimer = setInterval(() => {
         const msLeft = roundEndsAt - Date.now();
         const sLeft = Math.max(0, Math.ceil(msLeft / 1000));
-        ui.timer.textContent = String(sLeft);
-
+        ui.timer.textContent = sLeft;
         if (msLeft <= 0) endRound();
     }, 200);
 }
@@ -279,8 +248,7 @@ function endRound() {
     clearTimers();
     sounds.roundEnd();
 
-    // Include current word if not yet recorded this turn (counts as incomplete/bad)
-    const current = ui.word.textContent?.trim();
+    const current = ui.word.textContent;
     if (current && !used.some(u => u.word === current)) {
         used.push({ word: current, result: "bad" });
     }
@@ -290,9 +258,8 @@ function endRound() {
 }
 
 function renderResults() {
-    ui.score.textContent = String(score);
+    ui.score.textContent = score;
     ui.resultsList.innerHTML = "";
-
     used.forEach(item => {
         const li = document.createElement("li");
         li.textContent = item.word;
@@ -301,134 +268,123 @@ function renderResults() {
     });
 }
 
-// ---------- strict tilt logic (neutral -> action -> back to neutral -> next word) ----------
-function deltaFromNeutral(beta, gamma) {
-    if (!neutralRef) return { db: 0, dg: 0, mag: 0 };
-
-    const db = beta - neutralRef.beta;
-    const dg = gamma - neutralRef.gamma;
-
-    // Use whichever axis has the bigger change (landscape can swap behavior)
-    const mag = Math.abs(db) > Math.abs(dg) ? db : dg;
-    return { db, dg, mag };
-}
+/* ================================
+   STRICT TILT LOGIC
+   ================================ */
 
 function onDeviceOrientation(e) {
-    if (!gameActive) return;
-    if (!isLandscape()) return;
+    if (!gameActive || !isLandscape()) return;
 
-    const beta = e.beta;
-    const gamma = e.gamma;
-    if (typeof beta !== "number" || typeof gamma !== "number") return;
+    const { beta, gamma } = e;
+    if (beta == null || gamma == null) return;
 
-    // Calibrate neutral when we first get stable readings in gameplay
     if (!neutralRef) {
         neutralRef = { beta, gamma };
-        tiltState = "ARMED";      // once baseline captured, we can accept an action
+        tiltState = "ARMED";
         return;
     }
 
-    const { mag } = deltaFromNeutral(beta, gamma);
-    const inNeutral = Math.abs(mag) <= CONFIG.neutralToleranceDeg;
+    const delta = Math.abs(beta - neutralRef.beta) > Math.abs(gamma - neutralRef.gamma)
+        ? beta - neutralRef.beta
+        : gamma - neutralRef.gamma;
 
-    // After an action, we must return to neutral before advancing
+    const inNeutral = Math.abs(delta) <= CONFIG.neutralToleranceDeg;
+
     if (pendingAdvance) {
+        if (Date.now() < postActionUnlockAt) return;
         if (inNeutral) {
             pendingAdvance = false;
-            // Re-calibrate neutral at the exact "forehead" position again
             neutralRef = { beta, gamma };
-            tiltState = "ARMED";
-            deckIndex += 1;
+            holdStartCorrect = null;
+            holdStartPass = null;
+            deckIndex++;
             showCurrentWord();
         }
         return;
     }
 
-    // If not armed, wait for neutral
     if (tiltState === "NEED_NEUTRAL") {
         if (inNeutral) tiltState = "ARMED";
         return;
     }
 
-    // Armed: allow one action if thresholds hit
     if (tiltState === "ARMED") {
-        if (mag >= CONFIG.correctThresholdDeg) {
-            // Correct (screen to sky)
-            const current = ui.word.textContent;
-            used.push({ word: current, result: "correct" });
-            score += 1;
-            sounds.correct();
-            setOverlay("Correct!", "correct");
-
-            // Now wait until back to neutral before next word
-            pendingAdvance = true;
-            tiltState = "NEED_NEUTRAL";
-            return;
+        // CORRECT HOLD
+        if (delta >= CONFIG.correctThresholdDeg) {
+            if (!holdStartCorrect) holdStartCorrect = Date.now();
+            if (Date.now() - holdStartCorrect >= CONFIG.holdToTriggerMs) {
+                triggerAction("correct");
+            }
+        } else {
+            holdStartCorrect = null;
         }
 
-        if (mag <= CONFIG.passThresholdDeg) {
-            // Pass (screen to floor)
-            const current = ui.word.textContent;
-            used.push({ word: current, result: "bad" });
-            sounds.pass();
-            setOverlay("Pass", "bad");
-
-            pendingAdvance = true;
-            tiltState = "NEED_NEUTRAL";
-            return;
+        // PASS HOLD
+        if (delta <= CONFIG.passThresholdDeg) {
+            if (!holdStartPass) holdStartPass = Date.now();
+            if (Date.now() - holdStartPass >= CONFIG.holdToTriggerMs) {
+                triggerAction("pass");
+            }
+        } else {
+            holdStartPass = null;
         }
     }
 }
 
-// ---------- init ----------
-async function init() {
-    // listen for orientation changes
-    window.addEventListener("orientationchange", updateRotateOverlay);
-    window.addEventListener("resize", updateRotateOverlay);
-    updateRotateOverlay();
+function triggerAction(type) {
+    const current = ui.word.textContent;
 
-    // motion events
-    window.addEventListener("deviceorientation", onDeviceOrientation, { passive: true });
-
-    // modal enable
-    ui.modalEnable.addEventListener("click", async () => {
-        try {
-            ensureAudio();
-            if (audioCtx.state === "suspended") await audioCtx.resume();
-
-            await requestMotionPermission();
-            await tryLockLandscape();
-
-            ui.motionModal.classList.remove("active"); // hide modal
-            showScreen("categories");                  // now show categories
-
-            updateRotateOverlay();
-        } catch (err) {
-            alert("Could not enable motion. Check iOS permission and HTTPS/localhost.");
-            console.error(err);
-        }
-    });
-
-    // back button
-    ui.backBtn.addEventListener("click", () => {
-        clearTimers();
-        gameActive = false;
-        showScreen("categories");
-    });
-
-    // load categories
-    try {
-        await loadCategoriesIndex();
-        renderCategories();
-    } catch (err) {
-        console.error(err);
-        ui.categoryList.innerHTML = `<div style="color:rgba(246,248,255,0.8);font-weight:800;">
-      Failed to load categories index. Check <b>${CONFIG.indexFile}</b>.
-    </div>`;
+    if (type === "correct") {
+        used.push({ word: current, result: "correct" });
+        score++;
+        sounds.correct();
+        setOverlay("Correct!", "correct");
+    } else {
+        used.push({ word: current, result: "bad" });
+        sounds.pass();
+        setOverlay("Pass", "bad");
     }
 
-    // Start with ONLY the modal visible
-    // (No screen should show until permission granted.)
+    pendingAdvance = true;
+    tiltState = "NEED_NEUTRAL";
+    postActionUnlockAt = Date.now() + CONFIG.minPostActionHoldMs;
+}
+
+function setOverlay(text, type) {
+    ui.overlayText.textContent = text;
+    ui.overlay.classList.add("show");
+    setTimeout(() => {
+        ui.overlay.classList.remove("show");
+    }, CONFIG.overlayMs);
+}
+
+/* ================================
+   INIT
+   ================================ */
+
+async function init() {
+    window.addEventListener("deviceorientation", onDeviceOrientation);
+    window.addEventListener("resize", updateRotateOverlay);
+
+    ui.modalEnable.onclick = async () => {
+        ensureAudio();
+        if (audioCtx.state === "suspended") await audioCtx.resume();
+
+        if (typeof DeviceOrientationEvent.requestPermission === "function") {
+            await DeviceOrientationEvent.requestPermission();
+        }
+
+        ui.motionModal.classList.remove("active");
+        showScreen("categories");
+    };
+
+    ui.backBtn.onclick = () => {
+        showScreen("categories");
+    };
+
+    await loadCategoriesIndex();
+    renderCategories();
+
     Object.values(SCREENS).forEach(s => s.classList.remove("active"));
     ui.motionModal.classList.add("active");
 }
