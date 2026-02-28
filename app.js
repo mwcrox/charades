@@ -1,8 +1,3 @@
-/* Tilt Charades - Mobile web app
-   - iOS requires user gesture permission for motion sensors
-   - Serve over HTTPS (or localhost)
-*/
-
 const SCREENS = {
     categories: document.getElementById("screen-categories"),
     countdown: document.getElementById("screen-countdown"),
@@ -11,87 +6,51 @@ const SCREENS = {
 };
 
 const ui = {
-    enableMotion: document.getElementById("btn-enable-motion"),
+    // modal / overlays
+    motionModal: document.getElementById("motion-modal"),
+    modalEnable: document.getElementById("modal-enable"),
+    rotateOverlay: document.getElementById("rotate-overlay"),
+
+    // category screen
     categoryList: document.getElementById("category-list"),
+
+    // countdown
     countdownNumber: document.getElementById("countdown-number"),
+
+    // gameplay
     timer: document.getElementById("timer"),
     categoryName: document.getElementById("category-name"),
     word: document.getElementById("word"),
     overlay: document.getElementById("status-overlay"),
     overlayText: document.getElementById("status-text"),
+
+    // results
     score: document.getElementById("score"),
     resultsList: document.getElementById("results-list"),
     backBtn: document.getElementById("btn-back"),
 };
 
 const CONFIG = {
+    indexFile: "categories/1_categories.json", // <-- your renamed index file
+
     countdownSeconds: 5,
     roundSeconds: 60,
 
-    // Tilt thresholds (degrees)
-    // beta is front-to-back tilt: 0 = flat, 90 = upright portrait, negative = other direction
-    // We'll use a "relative" interpretation: when holding phone to forehead, beta tends to be around 80-100.
-    // We'll detect a "tilt up" vs "tilt down" relative to a calibrated baseline.
-    tiltDeltaCorrect: 18,
-    tiltDeltaPass: -18,
+    // STRONG thresholds (relative to neutral)
+    // We calibrate neutral when round starts and also after each word.
+    // Then we require returning to neutral before next word appears.
+    neutralToleranceDeg: 8,     // must be within this to be "neutral"
+    correctThresholdDeg: 35,    // tilt toward sky
+    passThresholdDeg: -35,      // tilt toward floor
 
-    // Debounce so one tilt doesn't trigger multiple times
-    actionCooldownMs: 900,
-
-    // How long to show correct/pass overlay
-    overlayMs: 450,
+    overlayMs: 420,
 };
 
 let audioCtx = null;
-
-// --- Game state ---
-let categoriesIndex = [];
-let currentCategory = null; // { name, file }
-let words = [];
-let deck = [];
-let deckIndex = 0;
-
-let baselineBeta = null; // calibration baseline
-let lastActionAt = 0;
-let gameActive = false;
-
-let countdownTimer = null;
-let roundTimer = null;
-let roundEndsAt = 0;
-
-let used = []; // [{ word, result: "correct"|"pass" }], includes current word when ended (handled)
-let score = 0;
-
-// Wake Lock (keeps screen on during round where supported)
-let wakeLock = null;
-
-// ---------------- UI helpers ----------------
-function showScreen(name) {
-    Object.values(SCREENS).forEach(s => s.classList.remove("active"));
-    SCREENS[name].classList.add("active");
-}
-
-function setOverlay(text, type) {
-    ui.overlayText.textContent = text;
-    ui.overlayText.style.borderColor = type === "correct" ? "rgba(46,204,113,0.55)" : "rgba(255,77,77,0.55)";
-    ui.overlayText.style.background =
-        type === "correct" ? "rgba(46,204,113,0.20)" : "rgba(255,77,77,0.20)";
-    ui.overlay.classList.add("show");
-    ui.overlay.setAttribute("aria-hidden", "false");
-    setTimeout(() => {
-        ui.overlay.classList.remove("show");
-        ui.overlay.setAttribute("aria-hidden", "true");
-    }, CONFIG.overlayMs);
-}
-
-// ---------------- Audio (no external files) ----------------
 function ensureAudio() {
-    if (!audioCtx) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    }
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 }
-
-function beep({ freq = 440, duration = 0.12, type = "sine", gain = 0.05 } = {}) {
+function beep({ freq = 440, duration = 0.12, type = "sine", gain = 0.06 } = {}) {
     ensureAudio();
     const t0 = audioCtx.currentTime;
     const osc = audioCtx.createOscillator();
@@ -105,99 +64,167 @@ function beep({ freq = 440, duration = 0.12, type = "sine", gain = 0.05 } = {}) 
     osc.start(t0);
     osc.stop(t0 + duration + 0.02);
 }
-
 const sounds = {
-    countdownTick() { beep({ freq: 660, duration: 0.08, gain: 0.06 }); },
-    roundStart() { beep({ freq: 880, duration: 0.18, gain: 0.07 }); },
-    correct() { beep({ freq: 1040, duration: 0.12, gain: 0.07 }); setTimeout(() => beep({ freq: 1320, duration: 0.10, gain: 0.06 }), 80); },
-    pass() { beep({ freq: 240, duration: 0.14, type: "square", gain: 0.05 }); },
-    roundEnd() { beep({ freq: 330, duration: 0.20, gain: 0.07 }); setTimeout(() => beep({ freq: 220, duration: 0.24, gain: 0.07 }), 160); },
+    countdownTick() { beep({ freq: 660, duration: 0.08, gain: 0.07 }); },
+    roundStart() { beep({ freq: 880, duration: 0.18, gain: 0.08 }); },
+    correct() { beep({ freq: 1040, duration: 0.12, gain: 0.08 }); setTimeout(() => beep({ freq: 1320, duration: 0.10, gain: 0.07 }), 70); },
+    pass() { beep({ freq: 240, duration: 0.16, type: "square", gain: 0.06 }); },
+    roundEnd() { beep({ freq: 330, duration: 0.20, gain: 0.08 }); setTimeout(() => beep({ freq: 220, duration: 0.25, gain: 0.08 }), 160); },
 };
 
-// ---------------- Categories loading ----------------
+// ---------- state ----------
+let categoriesIndex = [];
+let currentCategory = null;
+
+let words = [];
+let deck = [];
+let deckIndex = 0;
+
+let countdownTimer = null;
+let roundTimer = null;
+let roundEndsAt = 0;
+
+let gameActive = false;
+let used = []; // { word, result: "correct"|"bad" }
+let score = 0;
+
+// Motion / tilt gating
+let neutralRef = null;        // { beta, gamma } baseline "forehead neutral"
+let tiltState = "NEED_NEUTRAL"; // NEED_NEUTRAL -> ARMED -> (ACTION) -> NEED_NEUTRAL
+let pendingAdvance = false;   // after action, wait for neutral before next word
+
+// ---------- helpers ----------
+function showScreen(name) {
+    Object.values(SCREENS).forEach(s => s.classList.remove("active"));
+    SCREENS[name].classList.add("active");
+}
+
+function isLandscape() {
+    return window.matchMedia("(orientation: landscape)").matches;
+}
+
+function updateRotateOverlay() {
+    const mustShow = !isLandscape();
+    ui.rotateOverlay.classList.toggle("active", mustShow);
+    ui.rotateOverlay.setAttribute("aria-hidden", mustShow ? "false" : "true");
+}
+
+function clearTimers() {
+    if (countdownTimer) clearInterval(countdownTimer);
+    if (roundTimer) clearInterval(roundTimer);
+    countdownTimer = null;
+    roundTimer = null;
+}
+
+function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+}
+
+function setOverlay(text, kind) {
+    ui.overlayText.textContent = text;
+    ui.overlayText.style.borderColor = kind === "correct" ? "rgba(46,204,113,0.6)" : "rgba(255,59,59,0.6)";
+    ui.overlayText.style.background = kind === "correct" ? "rgba(46,204,113,0.22)" : "rgba(255,59,59,0.22)";
+    ui.overlay.classList.add("show");
+    ui.overlay.setAttribute("aria-hidden", "false");
+    setTimeout(() => {
+        ui.overlay.classList.remove("show");
+        ui.overlay.setAttribute("aria-hidden", "true");
+    }, CONFIG.overlayMs);
+}
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
+    }[c]));
+}
+
+// ---------- loading categories ----------
 async function loadCategoriesIndex() {
-    // Single index file. Add categories here (or use the optional Node generator).
-    const res = await fetch("categories/1_categories.json", { cache: "no-store" });
-    if (!res.ok) throw new Error("Failed to load categories index");
+    const res = await fetch(CONFIG.indexFile, { cache: "no-store" });
+    if (!res.ok) throw new Error("Failed to load category index");
     const data = await res.json();
-
-    if (!Array.isArray(data.categories)) throw new Error("Invalid categories.json format");
-
+    if (!Array.isArray(data.categories)) throw new Error("Invalid index format");
     categoriesIndex = data.categories;
 }
 
 function renderCategories() {
     ui.categoryList.innerHTML = "";
-
     categoriesIndex.forEach(cat => {
         const btn = document.createElement("button");
         btn.className = "category-btn";
         btn.type = "button";
-        btn.innerHTML = `<div>${escapeHtml(cat.name)}</div><span>Tap to start</span>`;
+        btn.innerHTML = escapeHtml(cat.name);
         btn.addEventListener("click", () => startCategory(cat));
         ui.categoryList.appendChild(btn);
     });
-
-    if (categoriesIndex.length === 0) {
-        ui.categoryList.innerHTML = `<p class="hint">No categories found. Add JSON files in /categories and list them in categories.json.</p>`;
-    }
 }
 
 async function loadCategoryWords(file) {
     const res = await fetch(`categories/${file}`, { cache: "no-store" });
-    if (!res.ok) throw new Error(`Failed to load category: ${file}`);
+    if (!res.ok) throw new Error(`Failed to load category file: ${file}`);
     const data = await res.json();
-
-    if (!Array.isArray(data.words)) throw new Error(`Invalid category file format: ${file}`);
-
-    // Normalize words: trim, remove blanks, ensure strings
-    return data.words
-        .map(w => (typeof w === "string" ? w.trim() : ""))
-        .filter(Boolean);
+    if (!Array.isArray(data.words)) throw new Error("Invalid category format");
+    return data.words.map(w => (typeof w === "string" ? w.trim() : "")).filter(Boolean);
 }
 
-// ---------------- Game flow ----------------
-async function startCategory(cat) {
-    try {
-        currentCategory = cat;
-        ui.categoryName.textContent = cat.name;
-
-        words = await loadCategoryWords(cat.file);
-        if (words.length < 1) {
-            alert("This category has no words.");
-            return;
-        }
-
-        // Randomize deck each round:
-        deck = shuffle([...words]);
-        deckIndex = 0;
-
-        used = [];
-        score = 0;
-
-        // Go to countdown
-        showScreen("countdown");
-        await maybeLockOrientation();
-        await requestWakeLock();
-
-        runCountdownAndStart();
-    } catch (err) {
-        console.error(err);
-        alert("Could not start category. Check console for details.");
+// ---------- permission / start ----------
+async function requestMotionPermission() {
+    // iOS requires this from a user gesture
+    if (typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function") {
+        const resp = await DeviceOrientationEvent.requestPermission();
+        if (resp !== "granted") throw new Error("Motion permission not granted");
     }
+}
+
+async function tryLockLandscape() {
+    try {
+        if (screen.orientation && screen.orientation.lock) {
+            await screen.orientation.lock("landscape");
+        }
+    } catch (_) { }
+}
+
+// ---------- game flow ----------
+async function startCategory(cat) {
+    if (!isLandscape()) {
+        updateRotateOverlay();
+        return;
+    }
+
+    currentCategory = cat;
+    ui.categoryName.textContent = cat.name;
+
+    words = await loadCategoryWords(cat.file);
+    if (!words.length) {
+        alert("That category has no words.");
+        return;
+    }
+
+    deck = shuffle([...words]);
+    deckIndex = 0;
+
+    used = [];
+    score = 0;
+
+    showScreen("countdown");
+    runCountdownAndStart();
 }
 
 function runCountdownAndStart() {
     clearTimers();
-    baselineBeta = null;
 
     let remaining = CONFIG.countdownSeconds;
     ui.countdownNumber.textContent = String(remaining);
-
-    // Audible “about to start” sound: tick each second
     sounds.countdownTick();
 
     countdownTimer = setInterval(() => {
+        if (!isLandscape()) { updateRotateOverlay(); return; }
+
         remaining -= 1;
         if (remaining > 0) {
             ui.countdownNumber.textContent = String(remaining);
@@ -213,42 +240,49 @@ function runCountdownAndStart() {
 
 function beginRound() {
     showScreen("game");
+
     gameActive = true;
-    lastActionAt = 0;
-
-    // Start with first word
-    deckIndex = 0;
-    showNextWord();
-
-    // Round timer
     roundEndsAt = Date.now() + CONFIG.roundSeconds * 1000;
     ui.timer.textContent = String(CONFIG.roundSeconds);
 
+    // reset tilt state
+    neutralRef = null;
+    tiltState = "NEED_NEUTRAL";
+    pendingAdvance = false;
+
+    // first word
+    showCurrentWord();
+
     roundTimer = setInterval(() => {
+        if (!gameActive) return;
+        if (!isLandscape()) { updateRotateOverlay(); return; }
+
         const msLeft = roundEndsAt - Date.now();
         const sLeft = Math.max(0, Math.ceil(msLeft / 1000));
         ui.timer.textContent = String(sLeft);
 
-        if (msLeft <= 0) {
-            endRound();
-        }
+        if (msLeft <= 0) endRound();
     }, 200);
+}
+
+function showCurrentWord() {
+    if (deckIndex >= deck.length) {
+        deck = shuffle([...words]);
+        deckIndex = 0;
+    }
+    ui.word.textContent = deck[deckIndex];
 }
 
 function endRound() {
     if (!gameActive) return;
     gameActive = false;
-
     clearTimers();
     sounds.roundEnd();
-    releaseWakeLock();
 
-    // Include current word in results if it exists and wasn't already recorded this turn.
-    const currentWord = ui.word.textContent?.trim();
-    if (currentWord && !used.some(u => u.word === currentWord && u._current === true)) {
-        // mark as "pass" by default? The user asked: include current word being tried.
-        // We'll label it "pass" so it's red (common behavior).
-        used.push({ word: currentWord, result: "pass", _current: true });
+    // Include current word if not yet recorded this turn (counts as incomplete/bad)
+    const current = ui.word.textContent?.trim();
+    if (current && !used.some(u => u.word === current)) {
+        used.push({ word: current, result: "bad" });
     }
 
     renderResults();
@@ -262,181 +296,141 @@ function renderResults() {
     used.forEach(item => {
         const li = document.createElement("li");
         li.textContent = item.word;
-
-        if (item.result === "correct") li.className = "correct";
-        else li.className = "passed";
-
+        li.className = item.result === "correct" ? "correct" : "bad";
         ui.resultsList.appendChild(li);
     });
 }
 
-function showNextWord() {
-    if (deckIndex >= deck.length) {
-        // If we run out of words, reshuffle and continue so the round always works.
-        deck = shuffle([...words]);
-        deckIndex = 0;
-    }
-    ui.word.textContent = deck[deckIndex];
+// ---------- strict tilt logic (neutral -> action -> back to neutral -> next word) ----------
+function deltaFromNeutral(beta, gamma) {
+    if (!neutralRef) return { db: 0, dg: 0, mag: 0 };
+
+    const db = beta - neutralRef.beta;
+    const dg = gamma - neutralRef.gamma;
+
+    // Use whichever axis has the bigger change (landscape can swap behavior)
+    const mag = Math.abs(db) > Math.abs(dg) ? db : dg;
+    return { db, dg, mag };
 }
 
-// ---------------- Tilt handling ----------------
 function onDeviceOrientation(e) {
-    // beta: front-to-back tilt in degrees. Range approx [-180, 180]
-    // We calibrate baseline when gameplay starts and we get first stable reading.
     if (!gameActive) return;
+    if (!isLandscape()) return;
 
     const beta = e.beta;
-    if (typeof beta !== "number") return;
+    const gamma = e.gamma;
+    if (typeof beta !== "number" || typeof gamma !== "number") return;
 
-    // Calibration
-    if (baselineBeta === null) {
-        baselineBeta = beta;
+    // Calibrate neutral when we first get stable readings in gameplay
+    if (!neutralRef) {
+        neutralRef = { beta, gamma };
+        tiltState = "ARMED";      // once baseline captured, we can accept an action
         return;
     }
 
-    const now = Date.now();
-    if (now - lastActionAt < CONFIG.actionCooldownMs) return;
+    const { mag } = deltaFromNeutral(beta, gamma);
+    const inNeutral = Math.abs(mag) <= CONFIG.neutralToleranceDeg;
 
-    const delta = beta - baselineBeta;
-
-    // Tilt up (towards user looking up) can vary depending on how held.
-    // With baseline, we trigger when beta increases enough, and pass when decreases enough.
-    if (delta >= CONFIG.tiltDeltaCorrect) {
-        handleAction("correct");
-    } else if (delta <= CONFIG.tiltDeltaPass) {
-        handleAction("pass");
-    }
-}
-
-function handleAction(type) {
-    if (!gameActive) return;
-    lastActionAt = Date.now();
-
-    const current = ui.word.textContent;
-
-    if (type === "correct") {
-        score += 1;
-        used.push({ word: current, result: "correct" });
-        sounds.correct();
-        setOverlay("Correct!", "correct");
-    } else {
-        used.push({ word: current, result: "pass" });
-        sounds.pass();
-        setOverlay("Pass", "pass");
+    // After an action, we must return to neutral before advancing
+    if (pendingAdvance) {
+        if (inNeutral) {
+            pendingAdvance = false;
+            // Re-calibrate neutral at the exact "forehead" position again
+            neutralRef = { beta, gamma };
+            tiltState = "ARMED";
+            deckIndex += 1;
+            showCurrentWord();
+        }
+        return;
     }
 
-    deckIndex += 1;
-    // Small delay so overlay reads clearly, then next word
-    setTimeout(() => {
-        if (!gameActive) return;
-        showNextWord();
+    // If not armed, wait for neutral
+    if (tiltState === "NEED_NEUTRAL") {
+        if (inNeutral) tiltState = "ARMED";
+        return;
+    }
 
-        // Recalibrate baseline a bit so repeated small movements don't drift
-        // (we re-baseline on the next motion event naturally, but keep stable)
-        // We'll nudge baseline toward current posture by setting it to null, re-learn next event.
-        baselineBeta = null;
-    }, CONFIG.overlayMs * 0.9);
-}
+    // Armed: allow one action if thresholds hit
+    if (tiltState === "ARMED") {
+        if (mag >= CONFIG.correctThresholdDeg) {
+            // Correct (screen to sky)
+            const current = ui.word.textContent;
+            used.push({ word: current, result: "correct" });
+            score += 1;
+            sounds.correct();
+            setOverlay("Correct!", "correct");
 
-// ---------------- Permissions / platform helpers ----------------
-async function enableMotionIfNeeded() {
-    // iOS 13+: DeviceMotion / DeviceOrientation permission is required.
-    // Some browsers only expose DeviceOrientationEvent.requestPermission.
-    if (typeof DeviceOrientationEvent !== "undefined" &&
-        typeof DeviceOrientationEvent.requestPermission === "function") {
-        try {
-            const resp = await DeviceOrientationEvent.requestPermission();
-            if (resp !== "granted") {
-                alert("Motion permission not granted. Tilt controls won’t work.");
-            }
-        } catch (err) {
-            console.error(err);
-            alert("Could not request motion permission.");
+            // Now wait until back to neutral before next word
+            pendingAdvance = true;
+            tiltState = "NEED_NEUTRAL";
+            return;
+        }
+
+        if (mag <= CONFIG.passThresholdDeg) {
+            // Pass (screen to floor)
+            const current = ui.word.textContent;
+            used.push({ word: current, result: "bad" });
+            sounds.pass();
+            setOverlay("Pass", "bad");
+
+            pendingAdvance = true;
+            tiltState = "NEED_NEUTRAL";
+            return;
         }
     }
 }
 
-async function maybeLockOrientation() {
-    // Optional: attempt to lock to landscape (common for heads-up style)
-    // Only works in some browsers and usually requires fullscreen / user gesture.
-    try {
-        if (screen.orientation && screen.orientation.lock) {
-            // Try landscape; ignore failure.
-            await screen.orientation.lock("landscape");
-        }
-    } catch (_) { }
-}
-
-async function requestWakeLock() {
-    try {
-        if ("wakeLock" in navigator && navigator.wakeLock.request) {
-            wakeLock = await navigator.wakeLock.request("screen");
-        }
-    } catch (_) {
-        wakeLock = null;
-    }
-}
-
-function releaseWakeLock() {
-    try {
-        if (wakeLock) wakeLock.release();
-    } catch (_) { }
-    wakeLock = null;
-}
-
-// ---------------- Utils ----------------
-function clearTimers() {
-    if (countdownTimer) clearInterval(countdownTimer);
-    if (roundTimer) clearInterval(roundTimer);
-    countdownTimer = null;
-    roundTimer = null;
-}
-
-function shuffle(arr) {
-    // Fisher-Yates
-    for (let i = arr.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-    return arr;
-}
-
-function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, c => ({
-        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
-    }[c]));
-}
-
-// ---------------- Init ----------------
+// ---------- init ----------
 async function init() {
-    // Hook up motion listener (works after permission on iOS)
+    // listen for orientation changes
+    window.addEventListener("orientationchange", updateRotateOverlay);
+    window.addEventListener("resize", updateRotateOverlay);
+    updateRotateOverlay();
+
+    // motion events
     window.addEventListener("deviceorientation", onDeviceOrientation, { passive: true });
 
-    ui.enableMotion.addEventListener("click", async () => {
-        await enableMotionIfNeeded();
-        // Also resume audio context on user gesture to allow sounds
-        ensureAudio();
-        if (audioCtx.state === "suspended") await audioCtx.resume();
-        alert("Motion enabled (if supported). You can start a category now.");
+    // modal enable
+    ui.modalEnable.addEventListener("click", async () => {
+        try {
+            ensureAudio();
+            if (audioCtx.state === "suspended") await audioCtx.resume();
+
+            await requestMotionPermission();
+            await tryLockLandscape();
+
+            ui.motionModal.classList.remove("active"); // hide modal
+            showScreen("categories");                  // now show categories
+
+            updateRotateOverlay();
+        } catch (err) {
+            alert("Could not enable motion. Check iOS permission and HTTPS/localhost.");
+            console.error(err);
+        }
     });
 
+    // back button
     ui.backBtn.addEventListener("click", () => {
         clearTimers();
         gameActive = false;
-        releaseWakeLock();
         showScreen("categories");
     });
 
-    // Load categories
+    // load categories
     try {
         await loadCategoriesIndex();
         renderCategories();
     } catch (err) {
         console.error(err);
-        ui.categoryList.innerHTML = `<p class="hint">Failed to load categories. Make sure /categories/categories.json exists.</p>`;
+        ui.categoryList.innerHTML = `<div style="color:rgba(246,248,255,0.8);font-weight:800;">
+      Failed to load categories index. Check <b>${CONFIG.indexFile}</b>.
+    </div>`;
     }
 
-    showScreen("categories");
+    // Start with ONLY the modal visible
+    // (No screen should show until permission granted.)
+    Object.values(SCREENS).forEach(s => s.classList.remove("active"));
+    ui.motionModal.classList.add("active");
 }
 
 init();
