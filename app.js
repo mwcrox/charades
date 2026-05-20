@@ -10,8 +10,6 @@ const SCREENS = {
 };
 
 const ui = {
-    rotateOverlay: document.getElementById("rotate-overlay"),
-
     categoryList: document.getElementById("category-list"),
     countdownNumber: document.getElementById("countdown-number"),
 
@@ -118,13 +116,6 @@ function showScreen(name) {
     SCREENS[name].classList.add("active");
 }
 
-function isLandscape() {
-    return window.matchMedia("(orientation: landscape)").matches;
-}
-
-function updateRotateOverlay() {
-    ui.rotateOverlay.classList.toggle("active", !isLandscape());
-}
 
 function clearTimers() {
     if (countdownTimer) clearInterval(countdownTimer);
@@ -175,9 +166,6 @@ async function loadCategoryWords(file) {
    ================================ */
 
 async function startCategory(cat) {
-    updateRotateOverlay();
-    if (!isLandscape()) return;
-
     await unlockAudio();
 
     currentCategory = cat;
@@ -303,9 +291,6 @@ function setOverlay(text, type) {
    ================================ */
 
 async function init() {
-    window.addEventListener("resize", updateRotateOverlay);
-    window.addEventListener("orientationchange", updateRotateOverlay);
-
     ui.passBtn.onclick = () => answerCurrentWord("pass");
     ui.correctBtn.onclick = () => answerCurrentWord("correct");
 
@@ -313,14 +298,14 @@ async function init() {
         clearTimers();
         gameActive = false;
         showScreen("categories");
-        updateRotateOverlay();
     };
 
     await loadCategoriesIndex();
     renderCategories();
 
     showScreen("categories");
-    updateRotateOverlay();
 }
+
+init();
 
 init();

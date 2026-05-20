@@ -322,46 +322,6 @@ button {
     color: var(--bad);
 }
 
-/* Rotate overlay */
-.rotate-overlay {
-    position: fixed;
-    inset: 0;
-    display: none;
-    place-items: center;
-    background: rgba(0, 0, 0, 0.55);
-    backdrop-filter: blur(10px);
-    z-index: 40;
-}
-
-.rotate-overlay.active {
-    display: grid;
-}
-
-.rotate-card {
-    text-align: center;
-    padding: 18px 20px;
-    border-radius: 22px;
-    background: rgba(0, 0, 0, 0.35);
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    box-shadow: var(--shadow);
-}
-
-.rotate-icon {
-    font-size: 38px;
-    margin-bottom: 6px;
-}
-
-.rotate-text {
-    font-size: 20px;
-    font-weight: 1000;
-}
-
-.rotate-sub {
-    font-size: 14px;
-    font-weight: 800;
-    color: var(--muted);
-    max-width: 280px;
-}
 
 /* Landscape phone tuning */
 @media (orientation: landscape) and (max-height: 520px) {
@@ -375,12 +335,18 @@ button {
     }
 
     .game-layout {
-        grid-template-rows: minmax(66px, 32%) 1fr;
-        gap: 8px;
+        flex: 1;
+        min-height: 0;
+        display: grid;
+        grid-template-rows: minmax(120px, 36%) 1fr;
+        gap: 12px;
     }
 
     .answer-buttons {
-        gap: 8px;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
     }
 
     .word {
@@ -389,5 +355,24 @@ button {
 
     .answer-btn {
         border-radius: 24px;
+    }
+}
+
+@media (orientation: portrait) {
+    .game-layout {
+        grid-template-rows: minmax(160px, 34%) 1fr;
+    }
+
+    .answer-buttons {
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr 1fr;
+    }
+
+    .word {
+        font-size: clamp(34px, 11vw, 72px);
+    }
+
+    .answer-btn {
+        font-size: clamp(34px, 12vw, 72px);
     }
 }
