@@ -4,30 +4,17 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Tilt Charades</title>
+    <title>Charades</title>
     <link rel="stylesheet" href="styles.css" />
 </head>
 
 <body>
-    <!-- MOTION PERMISSION MODAL (shows first) -->
-    <div id="motion-modal" class="modal active" role="dialog" aria-modal="true">
-        <div class="modal-card">
-            <h1 class="modal-title">Tilt Charades</h1>
-            <p class="modal-text">
-                This game needs access to motion sensors and audio.
-                <br><b>Tap Enable</b>, then rotate to <b>landscape</b>.
-            </p>
-            <button id="modal-enable" class="btn btn-primary">Enable & Start</button>
-            <p class="modal-footnote">If you deny permission, tilt controls won’t work.</p>
-        </div>
-    </div>
-
     <!-- ROTATE OVERLAY (shows if portrait) -->
     <div id="rotate-overlay" class="rotate-overlay" aria-hidden="true">
         <div class="rotate-card">
             <div class="rotate-icon">🔄</div>
             <div class="rotate-text">Rotate to Landscape</div>
-            <div class="rotate-sub">This game only works sideways.</div>
+            <div class="rotate-sub">This game is meant to be played sideways on a phone.</div>
         </div>
     </div>
 
@@ -53,7 +40,7 @@
 
         <!-- GAMEPLAY SCREEN -->
         <section id="screen-game" class="screen">
-            <header class="topbar">
+            <header class="topbar compact-topbar">
                 <div class="timer-pill">
                     <span class="timer-label">Time</span>
                     <span id="timer" class="timer">60</span>
@@ -61,9 +48,16 @@
                 <div id="category-name" class="category-pill">Category</div>
             </header>
 
-            <div class="word-area">
-                <div id="word" class="word">WORD</div>
-            </div>
+            <main class="game-layout">
+                <div class="word-area">
+                    <div id="word" class="word">WORD</div>
+                </div>
+
+                <div class="answer-buttons" aria-label="Answer controls">
+                    <button id="btn-pass" class="answer-btn pass-btn" type="button">Pass</button>
+                    <button id="btn-correct" class="answer-btn correct-btn" type="button">Correct</button>
+                </div>
+            </main>
 
             <div id="status-overlay" class="status-overlay" aria-hidden="true">
                 <div id="status-text" class="status-text">Correct!</div>

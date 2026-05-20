@@ -1,5 +1,5 @@
 /* ================================
-   Tilt Charades - Final Version
+   Button Charades - Landscape Phone Version
    ================================ */
 
 const SCREENS = {
@@ -10,8 +10,6 @@ const SCREENS = {
 };
 
 const ui = {
-    motionModal: document.getElementById("motion-modal"),
-    modalEnable: document.getElementById("modal-enable"),
     rotateOverlay: document.getElementById("rotate-overlay"),
 
     categoryList: document.getElementById("category-list"),
@@ -20,6 +18,8 @@ const ui = {
     timer: document.getElementById("timer"),
     categoryName: document.getElementById("category-name"),
     word: document.getElementById("word"),
+    passBtn: document.getElementById("btn-pass"),
+    correctBtn: document.getElementById("btn-correct"),
 
     overlay: document.getElementById("status-overlay"),
     overlayText: document.getElementById("status-text"),
@@ -35,18 +35,9 @@ const ui = {
 
 const CONFIG = {
     indexFile: "categories/1_categories.json",
-
     countdownSeconds: 5,
     roundSeconds: 60,
-
-    overlayMs: 1000,
-
-    neutralToleranceDeg: 6,
-    correctThresholdDeg: 45,
-    passThresholdDeg: -45,
-
-    holdToTriggerMs: 220,
-    minPostActionHoldMs: 900,
+    overlayMs: 500,
 };
 
 /* ================================
@@ -56,8 +47,16 @@ const CONFIG = {
 let audioCtx = null;
 
 function ensureAudio() {
-    if (!audioCtx)
+    if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+}
+
+async function unlockAudio() {
+    ensureAudio();
+    if (audioCtx.state === "suspended") {
+        await audioCtx.resume();
+    }
 }
 
 function beep({ freq = 440, duration = 0.12, type = "sine", gain = 0.07 } = {}) {
@@ -65,11 +64,13 @@ function beep({ freq = 440, duration = 0.12, type = "sine", gain = 0.07 } = {}) 
     const t0 = audioCtx.currentTime;
     const osc = audioCtx.createOscillator();
     const g = audioCtx.createGain();
+
     osc.type = type;
     osc.frequency.setValueAtTime(freq, t0);
     g.gain.setValueAtTime(0.0001, t0);
     g.gain.exponentialRampToValueAtTime(gain, t0 + 0.01);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
+
     osc.connect(g).connect(audioCtx.destination);
     osc.start(t0);
     osc.stop(t0 + duration + 0.02);
@@ -108,14 +109,6 @@ let gameActive = false;
 let used = [];
 let score = 0;
 
-let neutralRef = null;
-let tiltState = "NEED_NEUTRAL";
-let pendingAdvance = false;
-
-let postActionUnlockAt = 0;
-let holdStartCorrect = null;
-let holdStartPass = null;
-
 /* ================================
    HELPERS
    ================================ */
@@ -130,13 +123,15 @@ function isLandscape() {
 }
 
 function updateRotateOverlay() {
-    const show = !isLandscape();
-    ui.rotateOverlay.classList.toggle("active", show);
+    ui.rotateOverlay.classList.toggle("active", !isLandscape());
 }
 
 function clearTimers() {
     if (countdownTimer) clearInterval(countdownTimer);
     if (roundTimer) clearInterval(roundTimer);
+
+    countdownTimer = null;
+    roundTimer = null;
 }
 
 function shuffle(arr) {
@@ -159,6 +154,7 @@ async function loadCategoriesIndex() {
 
 function renderCategories() {
     ui.categoryList.innerHTML = "";
+
     categoriesIndex.forEach(cat => {
         const btn = document.createElement("button");
         btn.className = "category-btn";
@@ -179,7 +175,10 @@ async function loadCategoryWords(file) {
    ================================ */
 
 async function startCategory(cat) {
-    if (!isLandscape()) return updateRotateOverlay();
+    updateRotateOverlay();
+    if (!isLandscape()) return;
+
+    await unlockAudio();
 
     currentCategory = cat;
     ui.categoryName.textContent = cat.name;
@@ -202,11 +201,13 @@ function runCountdown() {
 
     countdownTimer = setInterval(() => {
         remaining--;
+
         if (remaining > 0) {
             ui.countdownNumber.textContent = remaining;
             sounds.countdownTick();
         } else {
             clearInterval(countdownTimer);
+            countdownTimer = null;
             sounds.roundStart();
             beginRound();
         }
@@ -215,11 +216,7 @@ function runCountdown() {
 
 function beginRound() {
     showScreen("game");
-
     gameActive = true;
-    neutralRef = null;
-    tiltState = "NEED_NEUTRAL";
-    pendingAdvance = false;
 
     showCurrentWord();
 
@@ -230,6 +227,7 @@ function beginRound() {
         const msLeft = roundEndsAt - Date.now();
         const sLeft = Math.max(0, Math.ceil(msLeft / 1000));
         ui.timer.textContent = sLeft;
+
         if (msLeft <= 0) endRound();
     }, 200);
 }
@@ -239,99 +237,13 @@ function showCurrentWord() {
         deck = shuffle([...words]);
         deckIndex = 0;
     }
-    ui.word.textContent = deck[deckIndex];
+
+    ui.word.textContent = deck[deckIndex] || "No words found";
 }
 
-function endRound() {
+function answerCurrentWord(type) {
     if (!gameActive) return;
-    gameActive = false;
-    clearTimers();
-    sounds.roundEnd();
 
-    const current = ui.word.textContent;
-    if (current && !used.some(u => u.word === current)) {
-        used.push({ word: current, result: "bad" });
-    }
-
-    renderResults();
-    showScreen("results");
-}
-
-function renderResults() {
-    ui.score.textContent = score;
-    ui.resultsList.innerHTML = "";
-    used.forEach(item => {
-        const li = document.createElement("li");
-        li.textContent = item.word;
-        li.className = item.result === "correct" ? "correct" : "bad";
-        ui.resultsList.appendChild(li);
-    });
-}
-
-/* ================================
-   STRICT TILT LOGIC
-   ================================ */
-
-function onDeviceOrientation(e) {
-    if (!gameActive || !isLandscape()) return;
-
-    const { beta, gamma } = e;
-    if (beta == null || gamma == null) return;
-
-    if (!neutralRef) {
-        neutralRef = { beta, gamma };
-        tiltState = "ARMED";
-        return;
-    }
-
-    const delta = Math.abs(beta - neutralRef.beta) > Math.abs(gamma - neutralRef.gamma)
-        ? beta - neutralRef.beta
-        : gamma - neutralRef.gamma;
-
-    const inNeutral = Math.abs(delta) <= CONFIG.neutralToleranceDeg;
-
-    if (pendingAdvance) {
-        if (Date.now() < postActionUnlockAt) return;
-        if (inNeutral) {
-            pendingAdvance = false;
-            neutralRef = { beta, gamma };
-            holdStartCorrect = null;
-            holdStartPass = null;
-            deckIndex++;
-            showCurrentWord();
-        }
-        return;
-    }
-
-    if (tiltState === "NEED_NEUTRAL") {
-        if (inNeutral) tiltState = "ARMED";
-        return;
-    }
-
-    if (tiltState === "ARMED") {
-        // CORRECT HOLD
-        if (delta >= CONFIG.correctThresholdDeg) {
-            if (!holdStartCorrect) holdStartCorrect = Date.now();
-            if (Date.now() - holdStartCorrect >= CONFIG.holdToTriggerMs) {
-                triggerAction("correct");
-            }
-        } else {
-            holdStartCorrect = null;
-        }
-
-        // PASS HOLD
-        if (delta <= CONFIG.passThresholdDeg) {
-            if (!holdStartPass) holdStartPass = Date.now();
-            if (Date.now() - holdStartPass >= CONFIG.holdToTriggerMs) {
-                triggerAction("pass");
-            }
-        } else {
-            holdStartPass = null;
-        }
-    }
-}
-
-function triggerAction(type) {
     const current = ui.word.textContent;
 
     if (type === "correct") {
@@ -345,16 +257,44 @@ function triggerAction(type) {
         setOverlay("Pass", "bad");
     }
 
-    pendingAdvance = true;
-    tiltState = "NEED_NEUTRAL";
-    postActionUnlockAt = Date.now() + CONFIG.minPostActionHoldMs;
+    deckIndex++;
+    showCurrentWord();
+}
+
+function endRound() {
+    if (!gameActive) return;
+
+    gameActive = false;
+    clearTimers();
+    sounds.roundEnd();
+
+    const current = ui.word.textContent;
+    if (current && current !== "No words found" && !used.some(u => u.word === current)) {
+        used.push({ word: current, result: "bad" });
+    }
+
+    renderResults();
+    showScreen("results");
+}
+
+function renderResults() {
+    ui.score.textContent = score;
+    ui.resultsList.innerHTML = "";
+
+    used.forEach(item => {
+        const li = document.createElement("li");
+        li.textContent = item.word;
+        li.className = item.result === "correct" ? "correct" : "bad";
+        ui.resultsList.appendChild(li);
+    });
 }
 
 function setOverlay(text, type) {
     ui.overlayText.textContent = text;
-    ui.overlay.classList.add("show");
+    ui.overlay.className = `status-overlay show ${type}`;
+
     setTimeout(() => {
-        ui.overlay.classList.remove("show");
+        ui.overlay.className = "status-overlay";
     }, CONFIG.overlayMs);
 }
 
@@ -363,30 +303,24 @@ function setOverlay(text, type) {
    ================================ */
 
 async function init() {
-    window.addEventListener("deviceorientation", onDeviceOrientation);
     window.addEventListener("resize", updateRotateOverlay);
+    window.addEventListener("orientationchange", updateRotateOverlay);
 
-    ui.modalEnable.onclick = async () => {
-        ensureAudio();
-        if (audioCtx.state === "suspended") await audioCtx.resume();
-
-        if (typeof DeviceOrientationEvent.requestPermission === "function") {
-            await DeviceOrientationEvent.requestPermission();
-        }
-
-        ui.motionModal.classList.remove("active");
-        showScreen("categories");
-    };
+    ui.passBtn.onclick = () => answerCurrentWord("pass");
+    ui.correctBtn.onclick = () => answerCurrentWord("correct");
 
     ui.backBtn.onclick = () => {
+        clearTimers();
+        gameActive = false;
         showScreen("categories");
+        updateRotateOverlay();
     };
 
     await loadCategoriesIndex();
     renderCategories();
 
-    Object.values(SCREENS).forEach(s => s.classList.remove("active"));
-    ui.motionModal.classList.add("active");
+    showScreen("categories");
+    updateRotateOverlay();
 }
 
 init();
